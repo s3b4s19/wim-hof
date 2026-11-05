@@ -2118,6 +2118,17 @@
       droneTo(0.03, t + 1.2, 3);
     }
 
+    function cuePause(t, tEnd) {
+      bell(220, t, 0.2, 0.9);
+      bedTo(0.022, t, 1.2);
+      droneTo(0.014, t, 1.2);
+
+      /* Dos gotas: el conteo hacia la inhalación de recuperación. */
+      var horizon = ctx.currentTime + 0.2;
+      if (tEnd - 2 > horizon) drop(659.25, tEnd - 2, 0.06);
+      if (tEnd - 1 > horizon) drop(783.99, tEnd - 1, 0.065);
+    }
+
     function cueRecovery(t, tEnd) {
       var span = tEnd - t;
       var inhale = span * 0.32;
@@ -2218,6 +2229,7 @@
       else if (phase === 'inhale') cueInhale(t, tEnd, info);
       else if (phase === 'exhale') cueExhale(t, tEnd, info);
       else if (phase === 'retention') cueRetention(t);
+      else if (phase === 'pause') cuePause(t, tEnd);
       else if (phase === 'recovery') cueRecovery(t, tEnd);
       else if (phase === 'transition') cueTransition(t, tEnd);
       else if (phase === 'closing') cueClosing(t, tEnd);
@@ -2413,6 +2425,7 @@
      ============================================================ */
   var PREP = 2;
   var RECOVERY = 15;
+  var PAUSE = 3;
   var TRANSITION = 3;
   var CLOSING = 120;
 
@@ -2422,6 +2435,7 @@
     inhale: 'Inhala',
     exhale: 'Suelta',
     retention: 'Sin aire',
+    pause: 'Pausa',
     recovery: 'Con aire',
     transition: 'Suelta',
     closing: 'Integra',
@@ -2461,6 +2475,7 @@
       case 'prep': return PREP;
       case 'inhale': return session.cfg.inhale;
       case 'exhale': return session.cfg.exhale;
+      case 'pause': return PAUSE;
       case 'recovery': return RECOVERY;
       case 'transition': return TRANSITION;
       case 'closing': return CLOSING;
@@ -2485,6 +2500,8 @@
         return 'Barriga fuera al inhalar. Suelta sin forzar.';
       case 'retention':
         return 'Termina cuando llegue el impulso de respirar.';
+      case 'pause':
+        return 'La apnea terminó. En un momento, inhala profundo.';
       case 'recovery':
         return 'Inhala al máximo y mantén. Al terminar, suelta el aire.';
       case 'transition':
@@ -2524,7 +2541,7 @@
 
   function estimateText() {
     var breath = settings.breaths * (settings.inhale + settings.exhale);
-    var total = PREP + settings.rounds * (breath + RECOVERY) +
+    var total = PREP + settings.rounds * (breath + PAUSE + RECOVERY) +
       Math.max(0, settings.rounds - 1) * TRANSITION + CLOSING;
     return '≈ ' + mmss(total) + ' sin retención';
   }
@@ -2541,6 +2558,7 @@
       case 'retention':
         return mmss(elapsed);
       case 'prep':
+      case 'pause':
       case 'recovery':
       case 'transition':
       case 'closing':
@@ -2644,6 +2662,9 @@
         }
         break;
       case 'retention':
+        session.phase = 'pause';
+        break;
+      case 'pause':
         session.phase = 'recovery';
         break;
       case 'recovery':
@@ -2692,6 +2713,10 @@
           return { phase: 'inhale', round: session.round, breath: session.breath + 1 };
         }
         return { phase: 'retention', round: session.round, breath: session.breath };
+      case 'retention':
+        return { phase: 'pause', round: session.round, breath: session.breath };
+      case 'pause':
+        return { phase: 'recovery', round: session.round, breath: session.breath };
       case 'recovery':
         if (session.round + 1 < cfg.rounds) {
           return { phase: 'transition', round: session.round, breath: 0 };
@@ -2741,12 +2766,16 @@
       scale = lerp(1, 0.72, easeInOutSine(progress));
     } else if (phase === 'recovery') {
       scale = lerp(0.72, 0.94, clamp01(progress * 4));
+    } else if (phase === 'pause') {
+      scale = lerp(0.7, 0.72, easeInOutSine(progress));
     } else if (phase === 'retention') {
-      scale = 0.7;
+      scale = lerp(0.72, 0.7, clamp01(elapsed));
     } else if (phase === 'closing') {
-      scale = 0.64;
+      scale = lerp(0.94, 0.64, easeInOutSine(clamp01(elapsed / 3)));
     } else if (phase === 'prep') {
-      scale = 0.64;
+      scale = lerp(0.7, 0.72, easeInOutSine(progress));
+    } else if (phase === 'transition') {
+      scale = lerp(0.94, 0.72, easeInOutSine(progress));
     } else {
       scale = 0.68;
     }
@@ -2821,7 +2850,7 @@
   function endRetention() {
     if (!session.active || session.phase !== 'retention') return;
     session.lastHold = Math.max(0, (performance.now() - session.phaseStart) / 1000);
-    session.phase = 'recovery';
+    session.phase = 'pause';
     session.phaseStart = performance.now();
     enterPhase();
   }
@@ -2920,7 +2949,7 @@
   }
 
   function summaryText() {
-    return 'Recuperación 15 s · cierre de 2 min';
+    return 'Pausa 3 s · recuperación 15 s · cierre de 2 min';
   }
 
   function resetView() {
@@ -2950,6 +2979,8 @@
 
     if (phase === 'retention') {
       message = 'Sin aire. Termina cuando llegue el impulso de respirar.';
+    } else if (phase === 'pause') {
+      message = 'La apnea terminó. En un momento, inhala profundo.';
     } else if (phase === 'prep') {
       message = 'Prepárate. Empieza en un momento.';
     } else if (phase === 'recovery') {
