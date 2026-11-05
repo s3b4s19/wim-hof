@@ -169,6 +169,8 @@
     color: var(--ink-dim);
     font: 11px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
     white-space: pre;
+    max-width: calc(100vw - 24px);
+    overflow: hidden;
     pointer-events: none;
   }
 
@@ -259,6 +261,50 @@
     width: 20px;
     height: 20px;
     display: block;
+  }
+
+  /* ============================================================
+     4b. Pantalla tenue
+     ============================================================ */
+  body.dim-on { overflow: hidden; }
+
+  .dim {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    background: #000;
+    cursor: pointer;
+  }
+
+  .dim__inner {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    opacity: .2;
+  }
+
+  .dim__value {
+    font-size: clamp(30px, 9vw, 52px);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .02em;
+  }
+
+  .dim__label {
+    font-size: 11px;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+  }
+
+  .dim__hint {
+    position: absolute;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    opacity: .55;
   }
 
   .btn {
@@ -1077,6 +1123,12 @@
       <span class="app__title">Wim Hof</span>
     </div>
     <div class="app__tools">
+      <button class="icon-btn" type="button" id="dimBtn" data-action="dim" aria-label="Pantalla tenue" hidden>
+        <svg class="icon-btn__svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a6.8 6.8 0 1 0 10.6 10.6Z"
+                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button class="icon-btn" type="button" data-action="open-settings" aria-label="Ajustes de la sesión">
         <svg class="icon-btn__svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="3.1" fill="none" stroke="currentColor" stroke-width="1.3"/>
@@ -1145,6 +1197,14 @@
   </main>
 
   <p class="sr-only" aria-live="polite" aria-atomic="true" id="live"></p>
+</div>
+
+<div class="dim" id="dimOverlay" data-action="dim-off" role="button" tabindex="0" aria-label="Salir de la pantalla tenue" hidden>
+  <div class="dim__inner">
+    <span class="dim__value" id="dimValue">—</span>
+    <span class="dim__label" id="dimLabel">Preparado</span>
+  </div>
+  <span class="dim__hint">Toca para salir</span>
 </div>
 
 <dialog class="sheet" id="guideDialog" aria-labelledby="guideTitle">
@@ -1467,6 +1527,9 @@
     var suspendTimer = 0;
     var lateCount = 0;
     var lateMax = 0;
+    var suspensions = 0;
+    var resumeAttempts = 0;
+    var stateLog = [];
 
     var shapeIn = null;
     var shapeOut = null;
@@ -1913,7 +1976,7 @@
       var AudioCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtor) return false;
       try {
-        ctx = new AudioCtor({ latencyHint: 'interactive' });
+        ctx = new AudioCtor({ latencyHint: 'playback' });
       } catch (error) {
         try {
           ctx = new AudioCtor();
@@ -1923,6 +1986,24 @@
       }
       buildShapes();
       build();
+
+      if ('onstatechange' in ctx) {
+        ctx.onstatechange = function () {
+          stateLog.push(ctx.state);
+          if (stateLog.length > 8) stateLog.shift();
+
+          if (ctx.state === 'suspended') {
+            suspensions += 1;
+            if (session.active && !session.paused && settings.sound && resumeAttempts < 4) {
+              resumeAttempts += 1;
+              if (ensureRunning()) planAhead();
+            }
+          } else if (ctx.state === 'running') {
+            resumeAttempts = 0;
+          }
+        };
+      }
+
       return true;
     }
 
@@ -2172,6 +2253,9 @@
       if (!settings.sound) return;
       if (!ensure()) return;
       clearTimers();
+      stateLog.length = 0;
+      suspensions = 0;
+      resumeAttempts = 0;
       if (ctx.state === 'suspended') ctx.resume().catch(noop);
       plannedTo = -1;
       var t = ctx.currentTime;
@@ -2234,7 +2318,24 @@
     }
 
     function isSuspended() {
-      return !!(ctx && ctx.state === 'suspended');
+      return !!(ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted'));
+    }
+
+    /* Reanudación silenciosa: no toca el master ni suena el tono de
+       interfaz. Sirve para volver de una suspensión del sistema sin
+       que el usuario perciba un corte. */
+    function ensureRunning() {
+      if (!ctx) return false;
+      if (ctx.state === 'running' || ctx.state === 'closed') return false;
+      try {
+        var attempt = ctx.resume();
+        if (attempt && typeof attempt.catch === 'function') attempt.catch(noop);
+      } catch (error) {
+        return false;
+      }
+      flush();
+      plannedTo = -1;
+      return true;
     }
 
     /* Lectura para el panel de depuración: cuántos cues llegaron
@@ -2250,7 +2351,12 @@
         late: lateCount,
         maxLate: lateMax * 1000,
         pending: pending.length,
-        drift: drift
+        drift: drift,
+        state: ctx ? ctx.state : 'closed',
+        baseLatency: ctx && isNum(ctx.baseLatency) ? ctx.baseLatency * 1000 : null,
+        outputLatency: ctx && isNum(ctx.outputLatency) ? ctx.outputLatency * 1000 : null,
+        suspensions: suspensions,
+        history: stateLog.join('>')
       };
     }
 
@@ -2263,6 +2369,7 @@
       complete: complete,
       resync: resync,
       isSuspended: isSuspended,
+      ensureRunning: ensureRunning,
       volume: applyVolume,
       ambient: ambient,
       stats: stats
@@ -2289,6 +2396,10 @@
     statHold: byId('statHold'),
     estimate: byId('estimate'),
     notice: byId('stageNotice'),
+    dim: byId('dimOverlay'),
+    dimValue: byId('dimValue'),
+    dimLabel: byId('dimLabel'),
+    dimBtn: byId('dimBtn'),
     profileGroup: byId('profileGroup'),
     profileState: byId('profileState'),
     adv: byId('advSettings'),
@@ -2331,6 +2442,9 @@
     pausedElapsed: 0,
     raf: 0,
     bgTimer: 0,
+    bgLastTick: 0,
+    bgMaxGap: 0,
+    bgTicks: 0,
     cfg: null
   };
 
@@ -2481,8 +2595,14 @@
 
   function startBackgroundLoop() {
     if (session.bgTimer || !session.active || session.paused) return;
+    session.bgLastTick = performance.now();
     session.bgTimer = window.setInterval(function () {
-      tick(performance.now());
+      var now = performance.now();
+      var gap = now - session.bgLastTick;
+      if (gap > session.bgMaxGap) session.bgMaxGap = gap;
+      session.bgLastTick = now;
+      session.bgTicks += 1;
+      tick(now);
     }, 500);
   }
 
@@ -2551,8 +2671,10 @@
 
   function enterPhase() {
     planAhead();
-    updateUI();
-    announce();
+    if (doc.visibilityState === 'visible') {
+      updateUI();
+      announce();
+    }
   }
 
   /* La fase que viene, con el estado que tendrá al empezar. Se usa
@@ -2643,6 +2765,11 @@
     setText(el.roundLabel, eyebrowFor(phase));
     renderStats(elapsed);
     renderDebug(now);
+
+    if (dimOn) {
+      setText(el.dimValue, valueFor(phase, elapsed, duration));
+      setText(el.dimLabel, PHASE_LABEL[phase] || '');
+    }
   }
 
   /* ============================================================
@@ -2651,12 +2778,16 @@
   function startSession() {
     stopRenderLoop();
     stopBackgroundLoop();
+    setDim(false);
     session.cfg = snapshotConfig();
     session.active = true;
     session.paused = false;
     session.round = 0;
     session.breath = 0;
     session.lastHold = 0;
+    session.bgLastTick = 0;
+    session.bgMaxGap = 0;
+    session.bgTicks = 0;
     session.phase = 'prep';
     session.phaseStart = performance.now() + 140;
 
@@ -2672,6 +2803,7 @@
     session.pausedElapsed = performance.now() - session.phaseStart;
     stopRenderLoop();
     stopBackgroundLoop();
+    setDim(false);
     Audio.pause();
     updateUI();
   }
@@ -2716,6 +2848,7 @@
   function stopSession() {
     stopRenderLoop();
     stopBackgroundLoop();
+    setDim(false);
     session.active = false;
     session.paused = false;
     session.phase = 'idle';
@@ -2729,6 +2862,7 @@
   function finish() {
     stopRenderLoop();
     stopBackgroundLoop();
+    setDim(false);
     session.active = false;
     session.paused = false;
     session.phase = 'complete';
@@ -2749,6 +2883,19 @@
   /* ============================================================
      8. Interfaz
      ============================================================ */
+  var dimOn = false;
+
+  function setDim(on) {
+    if (on && (!session.active || session.paused)) return;
+    dimOn = !!on;
+    if (el.dim) el.dim.hidden = !dimOn;
+    if (doc.body) doc.body.classList.toggle('dim-on', dimOn);
+    if (dimOn) {
+      requestWakeLock();
+      if (el.dim && typeof el.dim.focus === 'function') el.dim.focus();
+    }
+  }
+
   function updateUI() {
     if (!el.primary) return;
 
@@ -2756,11 +2903,13 @@
       setText(el.primary, session.phase === 'complete' ? 'Repetir' : 'Comenzar');
       if (el.skip) el.skip.hidden = true;
       if (el.stop) el.stop.hidden = true;
+      if (el.dimBtn) el.dimBtn.hidden = true;
       return;
     }
 
     if (el.stop) el.stop.hidden = false;
     if (el.skip) el.skip.hidden = !(session.phase === 'transition' || session.phase === 'closing');
+    if (el.dimBtn) el.dimBtn.hidden = session.paused;
 
     if (session.paused) {
       setText(el.primary, 'Reanudar');
@@ -2842,10 +2991,16 @@
 
     var info = Audio.stats();
     var drift = info.drift === null ? 'n/d' : info.drift.toFixed(0) + ' ms';
+    var base = info.baseLatency === null ? 'n/d' : info.baseLatency.toFixed(0);
+    var out = info.outputLatency === null ? 'n/d' : info.outputLatency.toFixed(0);
     debugNode.textContent =
       'cues tardíos  ' + info.late + '\n' +
       'peor retraso  ' + info.maxLate.toFixed(0) + ' ms\n' +
       'voces vivas   ' + info.pending + '\n' +
+      'audio         ' + info.state + ' · ' + info.suspensions + ' susp\n' +
+      'latencia      ' + base + ' / ' + out + ' ms\n' +
+      'tick fondo    ' + Math.round(session.bgMaxGap) + ' ms · ' + session.bgTicks + '\n' +
+      'historial     ' + (info.history || 'n/d') + '\n' +
       'pantalla      ' + wakeLabel() + '\n' +
       'deriva salida ' + drift;
   }
@@ -2995,6 +3150,10 @@
       stopSession();
     } else if (action === 'skip') {
       skipPhase();
+    } else if (action === 'dim') {
+      setDim(true);
+    } else if (action === 'dim-off') {
+      setDim(false);
     } else if (action === 'open-guide') {
       openDialog(el.guide);
     } else if (action === 'close-guide') {
@@ -3006,8 +3165,18 @@
     }
   });
 
+  if (el.dim) {
+    el.dim.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+        event.preventDefault();
+        setDim(false);
+      }
+    });
+  }
+
   function openDialog(dialog) {
     if (!dialog) return;
+    setDim(false);
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
     } else {
@@ -3213,8 +3382,9 @@
 
     if (!session.active) return;
 
-    if (Audio.isSuspended()) {
-      Audio.resume();
+    updateUI();
+
+    if (Audio.isSuspended() && Audio.ensureRunning()) {
       planAhead();
     }
 
