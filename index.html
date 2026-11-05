@@ -2144,17 +2144,14 @@
 
     function cueTransition(t, tEnd) {
       var span = tEnd - t;
-      var out = Math.min(1.2, span * 0.2);
+      var out = Math.min(1.2, Math.max(0.8, span * 0.4));
       airGrain(shapeOut, t, out, 1400, 400);
       bell(329.63, t, 0.17, 0.6);
-      bell(277.18, t + 0.45, 0.15, 0.6);
-      bell(220, t + 0.9, 0.14, 0.7);
       bedTo(0.026, t, 2);
       droneTo(0.012, t, 2);
 
-      /* Tres gotas: la vuelta no depende de la memoria ni del reloj. */
+      /* Dos gotas: el conteo hacia el primer inhala de la ronda. */
       var horizon = ctx.currentTime + 0.2;
-      if (tEnd - 3 > horizon) drop(587.33, tEnd - 3, 0.06);
       if (tEnd - 2 > horizon) drop(659.25, tEnd - 2, 0.06);
       if (tEnd - 1 > horizon) drop(783.99, tEnd - 1, 0.065);
     }
@@ -2416,7 +2413,7 @@
      ============================================================ */
   var PREP = 2;
   var RECOVERY = 15;
-  var TRANSITION = 20;
+  var TRANSITION = 3;
   var CLOSING = 120;
 
   var PHASE_LABEL = {
@@ -2426,7 +2423,7 @@
     exhale: 'Suelta',
     retention: 'Sin aire',
     recovery: 'Con aire',
-    transition: 'Respira',
+    transition: 'Suelta',
     closing: 'Integra',
     complete: 'Completa'
   };
@@ -2475,6 +2472,7 @@
     if (phase === 'idle' || phase === 'complete') return 'Método Wim Hof';
     if (phase === 'closing') return 'Cierre';
     if (phase === 'retention') return 'Retención';
+    if (phase === 'transition') return 'Ronda ' + (session.round + 1) + ' completada';
     return 'Ronda ' + (session.round + 1) + ' de ' + session.cfg.rounds;
   }
 
@@ -2488,9 +2486,9 @@
       case 'retention':
         return 'Termina cuando llegue el impulso de respirar.';
       case 'recovery':
-        return 'Inhala al máximo, hincha la barriga y mantén.';
+        return 'Inhala al máximo y mantén. Al terminar, suelta el aire.';
       case 'transition':
-        return 'Respira normal. Siguiente ronda cuando estés listo.';
+        return 'Suelta el aire y respira. La siguiente ronda empieza ya.';
       case 'closing':
         return 'Quédate tumbado un par de minutos antes de levantarte.';
       default:
@@ -2650,13 +2648,13 @@
         break;
       case 'recovery':
         if (session.round + 1 < session.cfg.rounds) {
-          session.round += 1;
           session.phase = 'transition';
         } else {
           session.phase = 'closing';
         }
         break;
       case 'transition':
+        session.round += 1;
         session.breath = 0;
         session.phase = 'inhale';
         break;
@@ -2696,11 +2694,11 @@
         return { phase: 'retention', round: session.round, breath: session.breath };
       case 'recovery':
         if (session.round + 1 < cfg.rounds) {
-          return { phase: 'transition', round: session.round + 1, breath: 0 };
+          return { phase: 'transition', round: session.round, breath: 0 };
         }
         return { phase: 'closing', round: session.round, breath: session.breath };
       case 'transition':
-        return { phase: 'inhale', round: session.round, breath: 0 };
+        return { phase: 'inhale', round: session.round + 1, breath: 0 };
       default:
         return null;
     }
@@ -2832,6 +2830,7 @@
     if (!session.active || session.paused) return;
     if (session.phase === 'transition') {
       Audio.resync();
+      session.round += 1;
       session.phase = 'inhale';
       session.breath = 0;
       session.phaseStart = performance.now();
@@ -2956,7 +2955,7 @@
     } else if (phase === 'recovery') {
       message = 'Con aire. Inhala al máximo y mantén quince segundos.';
     } else if (phase === 'transition') {
-      message = 'Ronda completada. Respira normal.';
+      message = 'Ronda completada. Suelta el aire y respira; la siguiente ronda empieza en un momento.';
     } else if (phase === 'closing') {
       message = 'Ejercicio completado. Quédate tumbado.';
     } else if (phase === 'inhale' && session.breath === 0) {
