@@ -1527,6 +1527,7 @@
     var suspendTimer = 0;
     var lateCount = 0;
     var lateMax = 0;
+    var dropped = 0;
     var suspensions = 0;
     var resumeAttempts = 0;
     var stateLog = [];
@@ -2119,7 +2120,8 @@
     }
 
     function cuePause(t, tEnd) {
-      bell(220, t, 0.2, 0.9);
+      bell(196, t, 0.22, 1.2);
+      sweep(196, 261.63, t, 0.5, 0.055);
       bedTo(0.022, t, 1.2);
       droneTo(0.014, t, 1.2);
 
@@ -2211,12 +2213,17 @@
       plannedTo = boundaryPerf;
 
       /* Un borde que ya pasó (reanudar a mitad de fase) daría un cue
-         a destiempo. Se descarta y queda contado. */
+         a destiempo. Se descarta y queda contado. La pausa es la
+         excepción: nace de una acción inmediata y debe sonar aunque
+         la latencia de salida la deje atrás. */
       var lead = leadFor(boundaryPerf);
       if (lead < 0) {
         lateCount += 1;
         if (-lead > lateMax) lateMax = -lead;
-        if (lead < -0.18) return;
+        if (lead < -0.18 && phase !== 'pause') {
+          dropped += 1;
+          return;
+        }
       }
 
       var duration = phaseDuration(phase);
@@ -2265,6 +2272,9 @@
       stateLog.length = 0;
       suspensions = 0;
       resumeAttempts = 0;
+      lateCount = 0;
+      lateMax = 0;
+      dropped = 0;
       if (ctx.state === 'suspended') ctx.resume().catch(noop);
       plannedTo = -1;
       var t = ctx.currentTime;
@@ -2365,6 +2375,7 @@
         baseLatency: ctx && isNum(ctx.baseLatency) ? ctx.baseLatency * 1000 : null,
         outputLatency: ctx && isNum(ctx.outputLatency) ? ctx.outputLatency * 1000 : null,
         suspensions: suspensions,
+        dropped: dropped,
         history: stateLog.join('>')
       };
     }
@@ -3026,6 +3037,7 @@
     debugNode.textContent =
       'cues tardíos  ' + info.late + '\n' +
       'peor retraso  ' + info.maxLate.toFixed(0) + ' ms\n' +
+      'descartados   ' + info.dropped + '\n' +
       'voces vivas   ' + info.pending + '\n' +
       'audio         ' + info.state + ' · ' + info.suspensions + ' susp\n' +
       'latencia      ' + base + ' / ' + out + ' ms\n' +
